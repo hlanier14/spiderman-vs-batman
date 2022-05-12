@@ -167,8 +167,14 @@ def training():
         hog_descriptors.append(descriptors)
     hog_descriptors = np.squeeze(hog_descriptors)
 
+    print(hog_descriptors)
+    print(hog_descriptors.shape)
+
     # cluster descriptors using BOW
     bow.cluster(hog_descriptors)
+
+    print(bow.vocabulary)
+    print(bow.vocabulary.shape)
 
     # generating histograms for each descriptor
     # each image should have a k length vector of # of times each vocab element shows up in the image
@@ -176,6 +182,9 @@ def training():
     for i, desc in enumerate(hog_descriptors):
         hist = bow.generate_histogram(desc)
         histograms[i] = hist
+
+    print(histograms)
+    print(histograms.shape)
 
     print('Spliting data into training (90%) and test set (10%)... ')
     train_n = int(0.9 * len(data))
