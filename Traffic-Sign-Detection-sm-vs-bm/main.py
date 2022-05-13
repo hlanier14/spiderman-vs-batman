@@ -8,6 +8,7 @@ import argparse
 import os
 import math
 import sys
+import random as rnd
 
 from classification import training, getLabel
 
@@ -36,15 +37,20 @@ def constrastLimit(image):
     return img_hist_equalized
 
 def LaplacianOfGaussian(image):
-    LoG_image = cv2.GaussianBlur(image, (7,7), 1)           # paramter 
+    LoG_image = cv2.medianBlur(image, 3)       # paramter 
+    kernel3 = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3,3))
+    kernel5 = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5,5))
+    LoG_image = cv2.dilate(LoG_image, kernel5)
+    LoG_image = cv2.erode(LoG_image, kernel3)
+
     gray = cv2.cvtColor(LoG_image, cv2.COLOR_BGR2GRAY)
-    LoG_image = cv2.Laplacian(gray, cv2.CV_8U, 3, 3, 3)       # parameter
+    LoG_image = cv2.Laplacian(gray, cv2.CV_8U, 3, 3, 2)       # parameter
     LoG_image = cv2.convertScaleAbs(LoG_image)
     return LoG_image
     
 def binarization(image):
-    thresh = cv2.threshold(image,25,255,cv2.THRESH_BINARY)[1]
-    #thresh = cv2.adaptiveThreshold(image,255,cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY,11,2)
+    thresh = cv2.threshold(image,20,255,cv2.THRESH_BINARY)[1]
+    #thresh = cv2.adaptiveThreshold(image,255,cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 7, 5)
     return thresh
 
 def preprocess_image(image):
@@ -53,6 +59,7 @@ def preprocess_image(image):
     image = binarization(image)
     return image
 
+"""
 # Find Signs
 def removeSmallComponents(image, threshold):
     #find all your connected components (white blobs in your image)
@@ -66,6 +73,54 @@ def removeSmallComponents(image, threshold):
             img2[output == i + 1] = 255
     #cv2.imshow("Connected Comp", img2)
     return img2
+"""
+
+def removeSmallComponents(image, threshold):
+    #find all your connected components (white blobs in your image)
+    nb_components, output, stats, centroids = cv2.connectedComponentsWithStats(image, connectivity=4)
+    sizes = stats[1:, -1]; nb_components = nb_components - 1
+    img2 = np.zeros((output.shape),dtype = np.uint8)
+
+    #for every component in the image, you keep it only if it's above threshold
+    for i in range(0, nb_components):
+        if sizes[i] >= threshold:
+            img2[output == i + 1] = 255
+    
+    mask = np.zeros(img2.shape,dtype="uint8") 
+    #cv2.imshow('image',image)
+    for i in range(1, nb_components): #filtering out areas for components
+
+        area = stats[i,cv2.CC_STAT_AREA]       
+        if area > 10:
+            filt_components = (output==i).astype('uint8')
+            mask = cv2.bitwise_or(mask,filt_components)
+
+    boxed_conn_comps, cnt = draw_contours(filt_components, mask)
+    #cv2.imshow("BoxedConnComps", boxed_conn_comps)
+    #cv2.imshow("Connected Comp", img2)
+
+    return img2, cnt
+
+def draw_contours(pix_labels, thresh):
+    num_labels = np.max(pix_labels) + 1
+
+    boxed_comps_img = np.zeros([pix_labels.shape[0], pix_labels.shape[1], 3], dtype=np.uint8)
+    boxed_comps_img[:,:,:] = 0
+
+    contours, hierarchy = cv2.findContours(thresh, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
+    cnt = contours[0]
+
+    rnd.seed()
+
+    # fill regions with random colors
+    for i,_ in enumerate(contours):
+        one_pix_hsv = np.zeros([1,1,3],dtype=np.uint8)
+        one_pix_hsv[0,0,:] = [ rnd.randint(0,255), rnd.randint(150,255), rnd.randint(200,255) ]
+        bgr_color = cv2.cvtColor (one_pix_hsv, cv2.COLOR_HSV2BGR)[0,0].tolist()
+        mask = np.zeros(thresh.shape,np.uint8)
+        cv2.drawContours(boxed_comps_img,contours,i,bgr_color,-1)
+
+    return boxed_comps_img, contours
 
 def findContour(image):
     #find contours in the thresholded image
@@ -167,16 +222,17 @@ def localization(image, min_size_components, similitary_contour_with_circle, mod
     original_image = image.copy()
     
     binary_image = preprocess_image(image)
-    cv2.imshow('Preprocess', binary_image)
-    binary_image = removeSmallComponents(binary_image, min_size_components)
-    cv2.imshow('Rm Small Components', binary_image)
+    #cv2.imshow('Preprocess', binary_image)
+    binary_image, _ = removeSmallComponents(binary_image, min_size_components)
+    #cv2.imshow('Rm Small Components', binary_image)
     #binary_image = cv2.bitwise_and(binary_image, binary_image, mask=remove_other_color(image))
     #cv2.imshow('BINARY IMAGE', binary_image)
-    #cv2.imshow('Remove color', remove_other_color(image))
+    #cv2.imshow('Remove color', binary_image)
     #binary_image = remove_line(binary_image)
-
+    #cv2.imshow('Remove line', binary_image)
     
     contours = findContour(binary_image)
+    #print(contours)
     #signs, coordinates = findSigns(image, contours, similitary_contour_with_circle, 15)
     sign, coordinate = findLargestSign(original_image, contours, similitary_contour_with_circle, 15)
     
@@ -198,10 +254,12 @@ def localization(image, min_size_components, similitary_contour_with_circle, mod
 
 def remove_line(img):
     gray = img.copy()
-    edges = cv2.Canny(gray, 50, 150, apertureSize = 3)
-    minLineLength = 5
-    maxLineGap = 3
-    lines = cv2.HoughLinesP(edges,1,np.pi/180,15,minLineLength,maxLineGap)
+    edges = cv2.Canny(gray, 50, 100, apertureSize = 5)
+    #cv2.imshow('Edges', edges)
+    minLineLength = 7
+    maxLineGap = 5
+    lines = cv2.HoughLinesP(edges, 1, np.pi/180, 15, minLineLength, maxLineGap)
+
     mask = np.ones(img.shape[:2], dtype="uint8") * 255
     if lines is not None:
         for line in lines:
@@ -243,9 +301,9 @@ def main():
     # read in test images from command line instead of video
     test_imgs = []
     test_img_files = []
-    for img_path in os.listdir("./dataset/test"):
+    for img_path in os.listdir("./dataset/test_imgs"):
         if any(x in img_path for x in ['.jpg', '.jpeg', '.png']):
-            img = cv2.imread(f"./dataset/test/{img_path}")
+            img = cv2.imread(f"./dataset/test_imgs/{img_path}")
             test_imgs.append(img)
             test_img_files.append(img_path)
 
@@ -255,8 +313,13 @@ def main():
         test_img = cv2.resize(test_img, (640,480))
 
         #image = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
-        coordinate, image, sign_type, text = localization(test_img, 50, 0.65, model)
+        #coordinate, image, sign_type, text = localization(test_img, 300, 0.1, model)
+        sign_type = getLabel(model, test_img)
 
+        print(f"\nImage: {test_img_files[i]}")
+        print("Sign: {}".format(sign_type))
+        print(f"Prediction: {SIGNS[sign_type]}")
+        """
         print(coordinate)
         if coordinate is not None:
             # cv2.rectangle(image, coordinate[0], coordinate[1], (255, 255, 255), 1)
@@ -270,6 +333,7 @@ def main():
 
         cv2.imshow(f'Result: {test_img_files[i]} Prediction: {SIGNS[sign_type]}', image)
         break
+        """
 
     cv2.waitKey(0)
     cv2.destroyAllWindows()

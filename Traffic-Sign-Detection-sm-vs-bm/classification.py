@@ -106,36 +106,31 @@ class BOW:
 
     def __init__(self):
         # k = 50 gives same output as original code
-        self.k = 5
+        self.k = 55
         self.vocabulary = None
 
     def cluster(self, descriptors):
         # cluster descriptors using kmeans cv2 function
-        criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 10, 0.01)
-        flags = cv2.KMEANS_PP_CENTERS
+        criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 10, 1.0)
+        flags = cv2.KMEANS_RANDOM_CENTERS
         # vocabulary is array of centroid points
-        _, _, self.vocabulary = cv2.kmeans(descriptors, self.k, None, criteria, 1, flags)
+        _, _, self.vocabulary = cv2.kmeans(descriptors, self.k, None, criteria, 10, flags)
 
     def generate_histogram(self, descriptors):
-        
-        # FLANN matcher to match descriptors to dictionary
-        FLANN_INDEX_KDTREE = 1
-        index_params = dict(algorithm = FLANN_INDEX_KDTREE, trees = 5)
-        search_params = dict(checks = 50)
-        matcher = cv2.FlannBasedMatcher(index_params, search_params)
 
         # reshape descriptors if dim does not match with vocabulary
         if descriptors.ndim == 1:
             descriptors = np.array([descriptors])
 
-        # k-length array to store counts of each vocabulary element in the given descriptors
+        # k-length array to store distances of each vocabulary element in the given descriptors
         histogram = np.zeros((len(self.vocabulary), 1))
-        # matches between the descriptors and vocabulary
-        matches = matcher.match(descriptors, self.vocabulary)
-        for match in matches:
-            # add 1 for each match descriptors have with vocabulary word 
-            histogram[match.trainIdx] += 1
-        
+
+        # histogram of distances to each centroid
+        for i, word in enumerate(self.vocabulary):
+            # get euclidian distance
+            dist = np.linalg.norm(descriptors - word)
+            histogram[i] = dist
+            
         # flatten array into a row
         return histogram.flatten()
 
@@ -176,7 +171,8 @@ def training():
     for i, desc in enumerate(hog_descriptors):
         hist = bow.generate_histogram(desc)
         histograms[i] = hist
-
+    print(histograms)
+    print(histograms.shape)
     # use all training images
     # print('Spliting data into training (90%) and test set (10%)... ')
     # train_n = int(0.9 * len(data))
