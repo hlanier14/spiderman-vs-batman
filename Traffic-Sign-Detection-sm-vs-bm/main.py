@@ -10,7 +10,7 @@ import math
 import sys
 import random as rnd
 
-from classification import training, getLabel
+from classification import training, getLabel, get_hog
 
 SIGNS = ["BATMAN",
          "SPIDERMAN",
@@ -22,8 +22,6 @@ def clean_images():
 	for file_name in file_list:
 		if '.png' in file_name:
 			os.remove(file_name)
-
-
 ### Preprocess image
 def constrastLimit(image):
     img_hist_equalized = cv2.cvtColor(image, cv2.COLOR_BGR2YCrCb)
@@ -169,7 +167,6 @@ def cropSign(image, coordinate):
     #print(top,left,bottom,right)
     return image[top:bottom,left:right]
 
-
 def findLargestSign(image, contours, threshold, distance_theshold):
     max_distance = 0
     coordinate = None
@@ -195,7 +192,6 @@ def findLargestSign(image, contours, threshold, distance_theshold):
             coordinate = [(left-2, top-2), (right+3,bottom+1)]
             sign = cropSign(image,coordinate)
     return sign, coordinate
-
 
 def findSigns(image, contours, threshold, distance_theshold):
     signs = []
@@ -292,6 +288,287 @@ def remove_other_color(img):
     #res = cv2.bitwise_and(frame,frame, mask= mask)
     return mask
 
+
+
+class FeatureMatcher():
+
+
+    def __init__(self, detector, descriptor, matcher):
+        
+        # check if combination is supported
+        self._checkFeatureCombo(detector, descriptor, matcher)
+
+        self.detector = detector.upper()
+        self.descriptor = descriptor.upper()
+        self.matcher = matcher.upper()
+
+
+    def _checkFeatureCombo(self, detector, descriptor, matcher):
+
+        # support following combinations:
+        #   FAST - BRIEF - FLANN
+        #   ORB - ORB - BF
+        #   SIFT - SIFT - FLANN
+
+        # check that given combination is supported
+        combo = detector.upper() + ' - ' + descriptor.upper()  + ' - ' + matcher.upper()
+        supported_combos = ['FAST - BRIEF - FLANN', 
+                            'ORB - ORB - BF', 
+                            'SIFT - SIFT - FLANN']
+        if combo not in supported_combos:
+            print(f'\nFeatureMatcher: given combination {combo} not supported')
+            print('The following combinations are supported: ')
+            for x in supported_combos:
+                print(f'\t{x}')
+            print('\n')
+            exit()
+
+
+    def _crossCheck(self, matches, matches_rev, twoLevel=False):
+        good_matches = []
+
+        for i in range(len(matches)):
+            if isinstance(matches[i], (tuple)):
+                m, n = matches[i]
+            else:
+                m = matches[i]
+
+            for j in range(len(matches_rev)):
+                if isinstance(matches_rev[j], (tuple)):
+                    p, q = matches_rev[j]
+                else:
+                    p = matches_rev[j]
+
+                if m.queryIdx == p.trainIdx and p.queryIdx == m.trainIdx:
+                    good_matches.append (m)
+                elif twoLevel:
+                    if m.queryIdx == q.trainIdx and q.queryIdx == m.trainIdx:
+                        good_matches.append (m)
+                    elif n.queryIdx == p.trainIdx and p.queryIdx == n.trainIdx:
+                        good_matches.append (n)
+                    elif n.queryIdx == q.trainIdx and q.queryIdx == n.trainIdx:
+                        good_matches.append (n)
+
+        return good_matches
+
+
+    def _lowesRatio(self, matches, ratio = .7):
+        # use lowes ratio test to filter for good matches
+        good_matches = []
+        for m, n in matches:
+            if m.distance < ratio * n.distance:
+                good_matches.append(m)
+        return good_matches
+
+
+    def detect(self, img):
+
+        detectors = {'FAST': cv2.FastFeatureDetector_create(), 
+                     'ORB': cv2.ORB_create(), 
+                     'SIFT': cv2.SIFT_create()}
+
+        det = detectors[self.detector]
+        return det.detect(img, None)
+
+    
+    def compute(self, img, kp):
+
+        descriptors = {'BRIEF': cv2.xfeatures2d.BriefDescriptorExtractor_create(), 
+                       'ORB': cv2.ORB_create(), 
+                       'SIFT': cv2.SIFT_create()}
+
+        desc = descriptors[self.descriptor]
+        return desc.compute(img, kp)
+
+
+    def detectAndCompute(self, img):
+
+        detectors_with_descriptiors = {'ORB': cv2.ORB_create(), 
+                                       'SIFT': cv2.SIFT_create()}
+        try:
+            det_and_desc = detectors_with_descriptiors[self.detector]
+        except:
+            print("detectAndCompute: given detector cannot act as descriptor")
+            exit()
+        return det_and_desc.detectAndCompute(img, None)
+
+
+    def match(self, des_query, des_train, FLANN_INDEX_KDTREE = 1, trees = 5, checks = 50, crossCheck = False, k = 2, lowes = .7, filter = 0):
+
+        # convert to float 32
+        des_query = np.float32(des_query)
+        des_train = np.float32(des_train)  
+
+        matchers = {'FLANN': cv2.FlannBasedMatcher(dict(algorithm = FLANN_INDEX_KDTREE, trees = trees), 
+                                                   dict(checks = checks)),
+                    'BF': cv2.BFMatcher(cv2.NORM_L2SQR, crossCheck = crossCheck)}
+        mat = matchers[self.matcher]
+        matches = mat.knnMatch(des_query, des_train, k = k)
+
+        # use given match filer
+        matches_rev = mat.knnMatch(des_train, des_query, k = k)
+        match_filters = [matches,                                                  # no filter
+                         self._lowesRatio(matches, lowes),                         # lowes ratio test
+                         self._crossCheck(matches, matches_rev, twoLevel = False), # crossCheck, twoLevel = False
+                         self._crossCheck(matches, matches_rev, twoLevel = True)]  # crossCheck, twoLevel = True
+
+        # return good_matches
+        return match_filters[filter]
+
+
+    def drawMatches(self, img_query, good_matches, kp_query):
+
+        if isinstance(good_matches, (tuple)):
+            good_matches = [m for m, n in good_matches]
+
+        """
+        # only consider if number of good matches meets min
+        if len(good_matches) < MIN_NUM_GOOD_MATCHES:
+            print("Not enough matches good were found - %d/%d" % (len(good_matches), MIN_NUM_GOOD_MATCHES))
+            # return no matches image
+            no_matches = cv2.imread('no_matches.jpg')
+            return no_matches
+        """
+
+        # matching points in query image
+        src_pts = np.float32(
+            [kp_query[m.queryIdx].pt for m in good_matches]).reshape(-1, 1, 2)
+        """
+        # matching points in training image
+        dst_pts = np.float32(
+            [kp_train[m.trainIdx].pt for m in good_matches]).reshape(-1, 1, 2)
+
+        # homography matrix
+        M, _ = cv2.findHomography(src_pts, dst_pts, cv2.RANSAC, 5.0)
+
+        h, w, _ = img_query.shape
+        src_corners = np.float32(
+            [[0, 0], [0, h-1], [w-1, h-1], [w-1, 0]]).reshape(-1, 1, 2)
+        dst_corners = cv2.perspectiveTransform(src_corners, M)
+        dst_corners = dst_corners.astype(np.int32)
+
+        # Draw the bounds of the matched region based on the homography.
+        
+        img_train_copy = img_train.copy()
+        num_corners = len(dst_corners)
+        for i in range(num_corners):
+            x0, y0 = dst_corners[i][0]
+            if i == num_corners - 1:
+                next_i = 0
+            else:
+                next_i = i + 1
+            x1, y1 = dst_corners[next_i][0]
+            cv2.line(img_train_copy, (x0, y0), (x1, y1), 255, 3, cv2.LINE_AA)
+
+        # Draw the matches that passed the ratio test.
+        #img_matches = cv2.drawMatches(
+        #    img_query, kp_query, img_train_copy, kp_train, good_matches, None,
+        #    matchColor = (0, 255, 0), singlePointColor = None,
+        #    flags=2)
+        """
+
+        for pt in src_pts:
+            img_query = cv2.circle(img_query, (pt[0], pt[1]), radius=0, color=(0,255,0), thickness=-1)
+
+        return img_query
+
+    def _matchBestTrainImg(self, img_query, test_img_loc = './dataset/0', FLANN_INDEX_KDTREE = 1, trees = 5, checks = 50, crossCheck = False, k = 2, lowes = .7, filter = 0):
+
+        kp_query = self.detect(img_query)
+        kp_query, des_query = self.compute(img_query, kp_query)
+
+        # get all images (files ending with png or jpg) in training image folder
+        training_imgs = [x for x in os.listdir(test_img_loc) if x.endswith('.png') or x.endswith('.jpg')]
+
+        train_kp_des = []
+        # compute kp / des for each training image and store in list
+        for img_name in training_imgs:
+            # read in image file
+            img_path = f'{test_img_loc}\{img_name}'
+            train_img = cv2.imread(img_path)
+            # compute kp and des and add to train_kp_des list
+            kp_train = self.detect(train_img)
+            kp_train, des_train = self.compute(train_img, kp_train)
+            # print(f'{img_name} kp: {len(kp_train)}, des: {len(des_train)}')
+            train_kp_des.append([kp_train, des_train])
+
+
+        matches = []
+        # iterate over all traing kp / des pairs
+        for index, train_det in enumerate(train_kp_des):
+            if train_det[0] is None or train_det[1] is None:
+                continue
+            # find matches against query image
+            good_matches = self.match(des_query, train_det[1], FLANN_INDEX_KDTREE, trees, checks, crossCheck, k, lowes, filter)
+            print(f'{training_imgs[index]} has {len(good_matches)} matches with query image')
+            # add to matches
+            matches.append(matches)
+
+        matched = self.drawMatches(img_query, 
+                                    matches, 
+                                    kp_query)
+        
+        return matched
+
+
+def resize_img(img, width = 250):
+    r = width / img.shape[1]
+    dim = (width, int(img.shape[0] * r))
+    return cv2.resize(img, dim, interpolation=cv2.INTER_AREA)
+
+def matchDescriptors(img, training_imgs):
+
+    sift = cv2.SIFT_create()
+    matcher = cv2.FlannBasedMatcher(dict(algorithm = 0, trees = 15), 
+                                     dict(checks = 200))
+
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    img_kp, img_desc = sift.detectAndCompute(gray, None)
+
+    min_good_matches = 0
+    kp_good_matches = []
+    src_points = []
+    dst_points = []
+    for i, train in enumerate(training_imgs):
+        # print("Matching training image: ", i + 1, " out of ", len(training_imgs))
+        train_gray = cv2.cvtColor(train, cv2.COLOR_BGR2GRAY)
+
+        train_kp, train_desc = sift.detectAndCompute(train_gray, None)
+        # match img descriptors to each training image descriptor
+        matches = matcher.knnMatch(img_desc, train_desc, k = 2)
+        # filter matches with lowes ratio
+        good_matches = []
+        for m, n in matches:
+            if m.distance < .7 * n.distance:
+                good_matches.append(m)
+
+        if len(good_matches) >= min_good_matches:
+            good_kps = [img_kp[m.queryIdx] for m in good_matches]
+            kp_good_matches = kp_good_matches + good_kps
+
+            src_pts = [img_kp[m.queryIdx].pt for m in good_matches]
+            dst_pts = [train_kp[m.trainIdx].pt for m in good_matches]
+
+            src_points = src_points + src_pts
+            dst_points = dst_points + dst_pts
+    
+    src_points = np.float32(src_points).reshape(-1,1,2)
+    dst_points = np.float32(dst_points).reshape(-1,1,2)
+
+    M, mask = cv2.findHomography(src_points, dst_points, cv2.RANSAC, 5.0)
+
+    pts = src_points[mask==1]
+    min_x, min_y = np.int32(pts.min(axis=0))
+    max_x, max_y = np.int32(pts.max(axis=0))
+    match_img = cv2.rectangle(img, (min_x, min_y), (max_x,max_y), 255,2)
+    #match_img = cv2.drawKeypoints(match_img, kp_good_matches, match_img, (255, 0, 0), flags=cv2.DRAW_MATCHES_FLAGS_DRAW_RICH_KEYPOINTS)
+
+    cropped_img = img[min_y:max_y, min_x:max_x]
+    # return good_matches
+    # return match_filters[filter]
+    return match_img, cropped_img
+
+
 def main():
 	# clean previous image    
     clean_images()
@@ -301,24 +578,49 @@ def main():
     # read in test images from command line instead of video
     test_imgs = []
     test_img_files = []
-    for img_path in os.listdir("./dataset/test_imgs"):
+    for img_path in os.listdir("./dataset/test"):
         if any(x in img_path for x in ['.jpg', '.jpeg', '.png']):
-            img = cv2.imread(f"./dataset/test_imgs/{img_path}")
+            img = cv2.imread(f"./dataset/test/{img_path}")
             test_imgs.append(img)
             test_img_files.append(img_path)
+
+    
+    training_imgs = []
+    for img_path in os.listdir("./dataset/0"):
+        if any(x in img_path for x in ['.jpg', '.jpeg', '.png']):
+            img = cv2.imread(f"./dataset/0/{img_path}")
+            img = resize_img(img)
+            training_imgs.append(img)
+    for img_path in os.listdir("./dataset/1"):
+        if any(x in img_path for x in ['.jpg', '.jpeg', '.png']):
+            img = cv2.imread(f"./dataset/1/{img_path}")
+            img = resize_img(img)
+            training_imgs.append(img)
+    for img_path in os.listdir("./dataset/2"):
+        if any(x in img_path for x in ['.jpg', '.jpeg', '.png']):
+            img = cv2.imread(f"./dataset/2/{img_path}")
+            img = resize_img(img)
+            training_imgs.append(img)
+    # randomly choose n images
+    # training_imgs = rnd.sample(training_imgs, 10)
 
     for i, test_img in enumerate(test_imgs):
 
         #frame = cv2.resize(frame, (640,int(height/(width/640))))
-        test_img = cv2.resize(test_img, (640,480))
+        test_img = resize_img(test_img)
 
         #image = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
         #coordinate, image, sign_type, text = localization(test_img, 300, 0.1, model)
-        sign_type = getLabel(model, test_img)
 
+        result, cropped = matchDescriptors(test_img, training_imgs)
+        #cv2.imshow("Result", cropped)
+        
+        sign_type = getLabel(model, cropped)
+        cv2.imshow(f"Image: {test_img_files[i]}, Prediction: {SIGNS[sign_type]}", result)
         print(f"\nImage: {test_img_files[i]}")
         print("Sign: {}".format(sign_type))
         print(f"Prediction: {SIGNS[sign_type]}")
+
         """
         print(coordinate)
         if coordinate is not None:
@@ -327,9 +629,7 @@ def main():
             font = cv2.FONT_HERSHEY_PLAIN
             cv2.putText(image,text,(coordinate[0][0], coordinate[0][1] -15), font, 1,(0,0,255),2,cv2.LINE_4)
         
-        print(f"\nImage: {test_img_files[i]}")
-        print("Sign: {}".format(sign_type))
-        print(f"Prediction: {SIGNS[sign_type]}")
+
 
         cv2.imshow(f'Result: {test_img_files[i]} Prediction: {SIGNS[sign_type]}', image)
         break

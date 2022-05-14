@@ -106,7 +106,7 @@ class BOW:
 
     def __init__(self):
         # k = 50 gives same output as original code
-        self.k = 55
+        self.k = 45
         self.vocabulary = None
 
     def cluster(self, descriptors):
@@ -130,7 +130,7 @@ class BOW:
             # get euclidian distance
             dist = np.linalg.norm(descriptors - word)
             histogram[i] = dist
-            
+
         # flatten array into a row
         return histogram.flatten()
 
@@ -171,8 +171,7 @@ def training():
     for i, desc in enumerate(hog_descriptors):
         hist = bow.generate_histogram(desc)
         histograms[i] = hist
-    print(histograms)
-    print(histograms.shape)
+
     # use all training images
     # print('Spliting data into training (90%) and test set (10%)... ')
     # train_n = int(0.9 * len(data))
