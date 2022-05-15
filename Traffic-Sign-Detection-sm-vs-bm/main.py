@@ -7,19 +7,19 @@ import itertools
 from classification import HOGBOWSVMPipeline
 
 
-def resize_img(img, width = 250):
+def resizeImage(img, width = 250):
     r = width / img.shape[1]
     dim = (width, int(img.shape[0] * r))
     return cv2.resize(img, dim, interpolation=cv2.INTER_AREA)
 
 
-def getImages(folder):
+def getImages(folder, width = 250):
     imgs = []
     img_names = []
     for img_path in os.listdir(folder):
         if any(x in img_path for x in ['.jpg', '.jpeg', '.png']):
             img = cv2.imread(f"{folder}/{img_path}")
-            img = resize_img(img)
+            img = resizeImage(img, width)
             imgs.append(img)
             img_names.append(img_path)
     return imgs, img_names
@@ -32,7 +32,7 @@ class ObjectDetector:
     # SIFT - SIFT - FLANN
     # match descriptors between the test image and all training_imgs 
 
-    def __init__(self, matcher_algorithm = 1, matcher_trees = 5, matcher_checks = 50, min_good_matches = 0, lowes = .7):
+    def __init__(self, matcher_algorithm = 1, matcher_trees = 10, matcher_checks = 150, min_good_matches = 0, lowes = .7):
         self.detector = cv2.SIFT_create()
         self.matcher = cv2.FlannBasedMatcher(dict(algorithm = matcher_algorithm, trees = matcher_trees), 
                                              dict(checks = matcher_checks))
@@ -51,12 +51,14 @@ class ObjectDetector:
 
     def _drawBoundingBox(self, img, src_points, dst_points):
 
+        img_copy = img.copy()
+
         M, mask = cv2.findHomography(src_points, dst_points, cv2.RANSAC, 5.0)
 
         pts = src_points[mask==1]
         min_x, min_y = np.int32(pts.min(axis=0))
         max_x, max_y = np.int32(pts.max(axis=0))
-        match_img = cv2.rectangle(img, (min_x, min_y), (max_x,max_y), 255, 2)
+        match_img = cv2.rectangle(img_copy, (min_x, min_y), (max_x,max_y), 255, 2)
         #match_img = cv2.drawKeypoints(match_img, kp_good_matches, match_img, (255, 0, 0), flags=cv2.DRAW_MATCHES_FLAGS_DRAW_RICH_KEYPOINTS)
 
         # return image with bounding both and cropped image
@@ -101,28 +103,34 @@ def main():
 
     # read in test images and training images
     test_imgs, test_img_files = getImages("./dataset/test")
-    training_imgs = getImages("./dataset/0")[0] + getImages("./dataset/1")[0] + getImages("./dataset/2")[0]
+    #test = 'spiderman4.jpeg'
+    #test_imgs = [resizeImage(cv2.imread(f"./dataset/test/{test}"))]
+    #test_img_files = [test]
+    training_imgs_orig = getImages("./dataset/0")[0] + getImages("./dataset/1")[0] + getImages("./dataset/2")[0]
+
 
     # specify parameters for DescriptorMatcher
     matcher_params = {"matcher_algorithm": 0,
-                      "matcher_checks": 200,
-                      "matcher_trees": 15,
+                      "matcher_trees": 10,
+                      "matcher_checks": 150,
                       "min_good_matches": 0,
                       "lowes": .7}
+
     matcher = ObjectDetector(**matcher_params)
 
-    model = HOGBOWSVMPipeline(bow_k = 15)
+    model = HOGBOWSVMPipeline(bow_k = 55)
     model.train()
 
     # find and predict label for comic book cover in each test img
     predictions = []
     for i, test_img in enumerate(test_imgs):
         # get img with bounded box and pixels captured in the box
-        result, cropped = matcher.match(test_img, training_imgs)
-    
+        result, cropped = matcher.match(test_img, training_imgs_orig)
+        #cropped = resizeImage(cropped, width = 700)
         # predict label for bounded pixels
         comic_type = model.predict(cropped)
         # show image with bounded box
+        #cv2.imshow(f"Image: {test_img_files[i]} Cropped", cropped)
         cv2.imshow(f"Image: {test_img_files[i]}, Prediction: {COMICS[comic_type]}", result)
 
         predictions.append(COMICS[comic_type])

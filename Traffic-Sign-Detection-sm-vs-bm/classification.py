@@ -91,7 +91,7 @@ class HOGBOWSVMPipeline:
             for sign_file in sign_list:
                 if any(x in sign_file for x in ['.jpg', '.jpeg', '.png']):
                     path = f"{base_folder}/{sign_type}/{sign_file}"
-                    print(path)
+                    # print(path)
                     img = cv2.imread(path,0)
                     img = cv2.resize(img, (self.SIZE, self.SIZE))
                     img = np.reshape(img, [self.SIZE, self.SIZE])
@@ -151,8 +151,8 @@ class HOGBOWSVMPipeline:
 
     def predict(self, img):
 
-        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-        img = [cv2.resize(gray, (self.SIZE, self.SIZE))]
+        #gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        #img = [cv2.resize(gray, (self.SIZE, self.SIZE))]
 
         img_deskewed = list(map(self._deskew, img))
 
